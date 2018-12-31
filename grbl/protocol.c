@@ -27,7 +27,9 @@
 #define LINE_FLAG_COMMENT_SEMICOLON bit(2)
 
 
-static char line[LINE_BUFFER_SIZE]; // Line to be executed. Zero-terminated.
+static char serial_line[LINE_BUFFER_SIZE]; // Line to be executed. Zero-terminated.
+static char hmi_line[LINE_BUFFER_SIZE]; // Line to be executed. Zero-terminated.
+
 
 static void protocol_exec_rt_suspend();
 
@@ -60,7 +62,7 @@ void protocol_main_loop()
       protocol_execute_realtime(); // Enter safety door mode. Should return as IDLE state.
     }
     // All systems go!
-    system_execute_startup(line); // Execute startup script.
+    system_execute_startup(serial_line); // Execute startup script.
   }
 
   // ---------------------------------------------------------------------------------
@@ -68,88 +70,15 @@ void protocol_main_loop()
   // This is also where Grbl idles while waiting for something to do.
   // ---------------------------------------------------------------------------------
 
-  uint8_t line_flags = 0;
-  uint8_t char_counter = 0;
-  uint8_t c;
+  uint8_t serial_line_flags = 0;
+  uint8_t serial_char_counter = 0;
+  uint8_t hmi_line_flags = 0;
+  uint8_t hmi_char_counter = 0;
+
   for (;;) {
 
-    // Process one line of incoming serial data, as the data becomes available. Performs an
-    // initial filtering by removing spaces and comments and capitalizing all letters.
-    while((c = serial_read()) != SERIAL_NO_DATA) {
-      if ((c == '\n') || (c == '\r')) { // End of line reached
-
-        protocol_execute_realtime(); // Runtime command check point.
-        if (sys.abort) { return; } // Bail to calling function upon system abort
-
-        line[char_counter] = 0; // Set string termination character.
-        #ifdef REPORT_ECHO_LINE_RECEIVED
-          report_echo_line_received(line);
-        #endif
-
-        // Direct and execute one line of formatted input, and report status of execution.
-        if (line_flags & LINE_FLAG_OVERFLOW) {
-          // Report line overflow error.
-          report_status_message(STATUS_OVERFLOW);
-        } else if (line[0] == 0) {
-          // Empty or comment line. For syncing purposes.
-          report_status_message(STATUS_OK);
-        } else if (line[0] == '$') {
-          // Grbl '$' system command
-          report_status_message(system_execute_line(line));
-        } else if (sys.state & (STATE_ALARM | STATE_JOG)) {
-          // Everything else is gcode. Block if in alarm or jog mode.
-          report_status_message(STATUS_SYSTEM_GC_LOCK);
-        } else {
-          // Parse and execute g-code block.
-          report_status_message(gc_execute_line(line));
-        }
-
-        // Reset tracking data for next line.
-        line_flags = 0;
-        char_counter = 0;
-
-      } else {
-
-        if (line_flags) {
-          // Throw away all (except EOL) comment characters and overflow characters.
-          if (c == ')') {
-            // End of '()' comment. Resume line allowed.
-            if (line_flags & LINE_FLAG_COMMENT_PARENTHESES) { line_flags &= ~(LINE_FLAG_COMMENT_PARENTHESES); }
-          }
-        } else {
-          if (c <= ' ') {
-            // Throw away whitepace and control characters
-          } else if (c == '/') {
-            // Block delete NOT SUPPORTED. Ignore character.
-            // NOTE: If supported, would simply need to check the system if block delete is enabled.
-          } else if (c == '(') {
-            // Enable comments flag and ignore all characters until ')' or EOL.
-            // NOTE: This doesn't follow the NIST definition exactly, but is good enough for now.
-            // In the future, we could simply remove the items within the comments, but retain the
-            // comment control characters, so that the g-code parser can error-check it.
-            line_flags |= LINE_FLAG_COMMENT_PARENTHESES;
-          } else if (c == ';') {
-            // NOTE: ';' comment to EOL is a LinuxCNC definition. Not NIST.
-            line_flags |= LINE_FLAG_COMMENT_SEMICOLON;
-          // TODO: Install '%' feature
-          // } else if (c == '%') {
-            // Program start-end percent sign NOT SUPPORTED.
-            // NOTE: This maybe installed to tell Grbl when a program is running vs manual input,
-            // where, during a program, the system auto-cycle start will continue to execute
-            // everything until the next '%' sign. This will help fix resuming issues with certain
-            // functions that empty the planner buffer to execute its task on-time.
-          } else if (char_counter >= (LINE_BUFFER_SIZE-1)) {
-            // Detect line buffer overflow and set flag.
-            line_flags |= LINE_FLAG_OVERFLOW;
-          } else if (c >= 'a' && c <= 'z') { // Upcase lowercase
-            line[char_counter++] = c-'a'+'A';
-          } else {
-            line[char_counter++] = c;
-          }
-        }
-
-      }
-    }
+    protocol_handle_serial(&serial_line_flags, &serial_char_counter);
+    protocol_handle_hmi(&hmi_line_flags, &hmi_char_counter);
 
     // If there are no more characters in the serial read buffer to be processed and executed,
     // this indicates that g-code streaming has either filled the planner buffer or has
@@ -168,6 +97,167 @@ void protocol_main_loop()
   return; /* Never reached */
 }
 
+
+void protocol_handle_hmi(uint8_t* hmi_line_flags, uint8_t* hmi_char_counter)
+{
+  // Process one line of incoming serial data, as the data becomes available. Performs an
+  // initial filtering by removing spaces and comments and capitalizing all letters.
+  uint8_t c;
+  while((c = hmi_read()) != HMI_NO_DATA) {
+    if ((c == '\n') || (c == '\r')) { // End of line reached
+
+      protocol_execute_realtime(); // Runtime command check point.
+      if (sys.abort) { return; } // Bail to calling function upon system abort
+
+      hmi_line[*hmi_char_counter] = 0; // Set string termination character.
+
+      // Direct and execute one line of formatted input, and report status of execution.
+      if (*hmi_line_flags & LINE_FLAG_OVERFLOW) {
+        // Report line overflow error.
+        // report_status_message(STATUS_OVERFLOW);
+      } else if (hmi_line[0] == 0) {
+        // Empty or comment line. For syncing purposes.
+        // report_status_message(STATUS_OK);
+      } else if (hmi_line[0] == '$') {
+        // Grbl '$' system command
+        // report_status_message(system_execute_line(hmi_line));
+        system_execute_line(hmi_line);
+      } else if (sys.state & (STATE_ALARM | STATE_JOG)) {
+        // Everything else is gcode. Block if in alarm or jog mode.
+        // report_status_message(STATUS_SYSTEM_GC_LOCK);
+      } else {
+        // Parse and execute g-code block.
+        // report_status_message(gc_execute_line(hmi_line));
+      }
+
+      // Reset tracking data for next line.
+      *hmi_line_flags = 0;
+      *hmi_char_counter = 0;
+
+    } else {
+
+      if (*hmi_line_flags) {
+        // Throw away all (except EOL) comment characters and overflow characters.
+        if (c == ')') {
+          // End of '()' comment. Resume line allowed.
+          if (*hmi_line_flags & LINE_FLAG_COMMENT_PARENTHESES) { *hmi_line_flags &= ~(LINE_FLAG_COMMENT_PARENTHESES); }
+        }
+      } else {
+        if (c <= ' ') {
+          // Throw away whitepace and control characters
+        } else if (c == '/') {
+          // Block delete NOT SUPPORTED. Ignore character.
+          // NOTE: If supported, would simply need to check the system if block delete is enabled.
+        } else if (c == '(') {
+          // Enable comments flag and ignore all characters until ')' or EOL.
+          // NOTE: This doesn't follow the NIST definition exactly, but is good enough for now.
+          // In the future, we could simply remove the items within the comments, but retain the
+          // comment control characters, so that the g-code parser can error-check it.
+          *hmi_line_flags |= LINE_FLAG_COMMENT_PARENTHESES;
+        } else if (c == ';') {
+          // NOTE: ';' comment to EOL is a LinuxCNC definition. Not NIST.
+          *hmi_line_flags |= LINE_FLAG_COMMENT_SEMICOLON;
+        // TODO: Install '%' feature
+        // } else if (c == '%') {
+          // Program start-end percent sign NOT SUPPORTED.
+          // NOTE: This maybe installed to tell Grbl when a program is running vs manual input,
+          // where, during a program, the system auto-cycle start will continue to execute
+          // everything until the next '%' sign. This will help fix resuming issues with certain
+          // functions that empty the planner buffer to execute its task on-time.
+        } else if (*hmi_char_counter >= (LINE_BUFFER_SIZE-1)) {
+          // Detect line buffer overflow and set flag.
+          *hmi_line_flags |= LINE_FLAG_OVERFLOW;
+        } else if (c >= 'a' && c <= 'z') { // Upcase lowercase
+          hmi_line[(*hmi_char_counter)++] = c-'a'+'A';
+        } else {
+          hmi_line[(*hmi_char_counter)++] = c;
+        }
+      }
+    }
+  }
+}
+
+
+void protocol_handle_serial(uint8_t* serial_line_flags, uint8_t* serial_char_counter)
+{
+  // Process one line of incoming serial data, as the data becomes available. Performs an
+  // initial filtering by removing spaces and comments and capitalizing all letters.
+  uint8_t c;
+  while((c = serial_read()) != SERIAL_NO_DATA) {
+    if ((c == '\n') || (c == '\r')) { // End of line reached
+
+      protocol_execute_realtime(); // Runtime command check point.
+      if (sys.abort) { return; } // Bail to calling function upon system abort
+
+      serial_line[*serial_char_counter] = 0; // Set string termination character.
+      #ifdef REPORT_ECHO_LINE_RECEIVED
+        report_echo_line_received(serial_line);
+      #endif
+
+      // Direct and execute one line of formatted input, and report status of execution.
+      if (*serial_line_flags & LINE_FLAG_OVERFLOW) {
+        // Report line overflow error.
+        report_status_message(STATUS_OVERFLOW);
+      } else if (serial_line[0] == 0) {
+        // Empty or comment line. For syncing purposes.
+        report_status_message(STATUS_OK);
+      } else if (serial_line[0] == '$') {
+        // Grbl '$' system command
+        report_status_message(system_execute_line(serial_line));
+      } else if (sys.state & (STATE_ALARM | STATE_JOG)) {
+        // Everything else is gcode. Block if in alarm or jog mode.
+        report_status_message(STATUS_SYSTEM_GC_LOCK);
+      } else {
+        // Parse and execute g-code block.
+        report_status_message(gc_execute_line(serial_line));
+      }
+
+      // Reset tracking data for next line.
+      *serial_line_flags = 0;
+      *serial_char_counter = 0;
+
+    } else {
+
+      if (*serial_line_flags) {
+        // Throw away all (except EOL) comment characters and overflow characters.
+        if (c == ')') {
+          // End of '()' comment. Resume line allowed.
+          if (*serial_line_flags & LINE_FLAG_COMMENT_PARENTHESES) { *serial_line_flags &= ~(LINE_FLAG_COMMENT_PARENTHESES); }
+        }
+      } else {
+        if (c <= ' ') {
+          // Throw away whitepace and control characters
+        } else if (c == '/') {
+          // Block delete NOT SUPPORTED. Ignore character.
+          // NOTE: If supported, would simply need to check the system if block delete is enabled.
+        } else if (c == '(') {
+          // Enable comments flag and ignore all characters until ')' or EOL.
+          // NOTE: This doesn't follow the NIST definition exactly, but is good enough for now.
+          // In the future, we could simply remove the items within the comments, but retain the
+          // comment control characters, so that the g-code parser can error-check it.
+          *serial_line_flags |= LINE_FLAG_COMMENT_PARENTHESES;
+        } else if (c == ';') {
+          // NOTE: ';' comment to EOL is a LinuxCNC definition. Not NIST.
+          *serial_line_flags |= LINE_FLAG_COMMENT_SEMICOLON;
+        // TODO: Install '%' feature
+        // } else if (c == '%') {
+          // Program start-end percent sign NOT SUPPORTED.
+          // NOTE: This maybe installed to tell Grbl when a program is running vs manual input,
+          // where, during a program, the system auto-cycle start will continue to execute
+          // everything until the next '%' sign. This will help fix resuming issues with certain
+          // functions that empty the planner buffer to execute its task on-time.
+        } else if (*serial_char_counter >= (LINE_BUFFER_SIZE-1)) {
+          // Detect line buffer overflow and set flag.
+          *serial_line_flags |= LINE_FLAG_OVERFLOW;
+        } else if (c >= 'a' && c <= 'z') { // Upcase lowercase
+          serial_line[(*serial_char_counter)++] = c-'a'+'A';
+        } else {
+          serial_line[(*serial_char_counter)++] = c;
+        }
+      }
+    }
+  }
+}
 
 // Block until all buffered steps are executed or in a cycle state. Works with feed hold
 // during a synchronize call, if it should happen. Also, waits for clean cycle end.
@@ -404,6 +494,16 @@ void protocol_exec_rt_system()
         }
       }
       system_clear_exec_state_flag(EXEC_CYCLE_STOP);
+    }
+  }
+
+  //execute hmi status report
+  rt_exec = hmi_rt_exec_state; // Copy volatile sys_rt_exec_state.
+  if (rt_exec) {
+    // Execute and serial print status
+    if (rt_exec & EXEC_STATUS_REPORT) {
+      hmi_report_realtime_status();
+      hmi_clear_state_flag(EXEC_STATUS_REPORT);
     }
   }
 

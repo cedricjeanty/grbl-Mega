@@ -32,6 +32,10 @@
   #define SERIAL_RX USART0_RX_vect
   #define SERIAL_UDRE USART0_UDRE_vect
 
+ // HMI port interrupt vectors
+  #define HMI_RX USART1_RX_vect
+  #define HMI_UDRE USART1_UDRE_vect
+
   // Define step pulse output pins. NOTE: All step bit pins must be on the same port.
   #define STEP_DDR      DDRA
   #define STEP_PORT     PORTA

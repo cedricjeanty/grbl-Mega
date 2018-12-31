@@ -31,6 +31,10 @@
 // them as they complete. It is also responsible for finishing the initialization procedures.
 void protocol_main_loop();
 
+void protocol_handle_hmi(uint8_t* hmi_line_flags, uint8_t* hmi_char_counter);
+
+void protocol_handle_serial(uint8_t* serial_line_flags, uint8_t* serial_char_counter);
+
 // Checks and executes a realtime command at various stop points in main program
 void protocol_execute_realtime();
 void protocol_exec_rt_system();

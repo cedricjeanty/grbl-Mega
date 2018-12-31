@@ -31,6 +31,11 @@ volatile uint8_t sys_rt_exec_state;   // Global realtime executor bitflag variab
 volatile uint8_t sys_rt_exec_alarm;   // Global realtime executor bitflag variable for setting various alarms.
 volatile uint8_t sys_rt_exec_motion_override; // Global realtime executor bitflag variable for motion-based overrides.
 volatile uint8_t sys_rt_exec_accessory_override; // Global realtime executor bitflag variable for spindle/coolant overrides.
+
+volatile uint8_t hmi_rt_exec_state;   // Global realtime executor bitflag variable for state management. See EXEC bitmasks.
+volatile uint8_t hmi_rt_exec_motion_override; // Global realtime executor bitflag variable for motion-based overrides.
+volatile uint8_t hmi_rt_exec_accessory_override; // Global realtime executor bitflag variable for spindle/coolant overrides.
+
 #ifdef DEBUG
   volatile uint8_t sys_rt_exec_debug;
 #endif
@@ -40,6 +45,7 @@ int main(void)
 {
   // Initialize system upon power-up.
   serial_init();   // Setup serial baud rate and interrupts
+  hmi_init();
   settings_init(); // Load Grbl settings from EEPROM
   stepper_init();  // Configure stepper pins and interrupt timers
   system_init();   // Configure pinout pins and pin-change interrupt
@@ -84,8 +90,13 @@ int main(void)
     sys_rt_exec_motion_override = 0;
     sys_rt_exec_accessory_override = 0;
 
+    hmi_rt_exec_state = 0;
+    hmi_rt_exec_motion_override = 0;
+    hmi_rt_exec_accessory_override = 0;
+
     // Reset Grbl primary systems.
     serial_reset_read_buffer(); // Clear serial read buffer
+    hmi_reset_read_buffer();
     gc_init(); // Set g-code parser to default state
     spindle_init();
     coolant_init();
